@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.engine import get_db
 from api.db.models import AuditEvent, ClientProfile, User
-from api.middleware.auth import require_consultant
+from api.middleware.auth import get_current_user, require_consultant
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
@@ -36,6 +36,21 @@ async def list_clients(
         .where(ClientProfile.assigned_consultant_id == consultant.id)
     )
     return [_serialize(u, p) for u, p in result.all()]
+
+
+@router.get("/me")
+async def get_my_profile(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Client fetches their own profile."""
+    result = await db.execute(
+        select(ClientProfile).where(ClientProfile.user_id == current_user.id)
+    )
+    profile = result.scalar_one_or_none()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return _serialize(current_user, profile)
 
 
 @router.get("/unassigned")

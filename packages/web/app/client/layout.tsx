@@ -8,26 +8,35 @@ import clsx from "clsx";
 
 const NAV = [
   {
-    href: "/dashboard",
-    label: "Clients",
+    href: "/client",
+    label: "Dashboard",
     icon: (
-      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2h5M12 12a4 4 0 100-8 4 4 0 000 8z"/>
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
       </svg>
     ),
   },
   {
-    href: "/dashboard/invite",
-    label: "Add client",
+    href: "/client/log",
+    label: "Log meal",
     icon: (
-      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}>
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4"/>
+      </svg>
+    ),
+  },
+  {
+    href: "/client/chat",
+    label: "AI Nutritionist",
+    icon: (
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
       </svg>
     ),
   },
 ];
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+export default function ClientLayout({ children }: { children: React.ReactNode }) {
   const router   = useRouter();
   const pathname = usePathname();
   const [name, setName]   = useState("");
@@ -36,15 +45,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   useEffect(() => {
     api.auth.me()
       .then((u) => {
-        if (u.role !== "consultant") {
-          router.replace("/client");
+        if (u.role !== "client") {
+          api.auth.logout();
+          router.replace("/login");
           return;
         }
         setName(u.name);
         setReady(true);
       })
       .catch(() => {
-        api.auth.logout();   // clear stale/invalid tokens — prevents redirect loop
+        api.auth.logout();
         router.replace("/login");
       });
   }, [router]);
@@ -55,10 +65,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex min-h-screen">
-      {/* Sidebar */}
       <aside className="w-52 shrink-0 flex flex-col bg-surface border-r border-black/[0.07]">
-
-        {/* Wordmark */}
         <div className="h-14 flex items-center px-5 border-b border-black/[0.05]">
           <div className="flex items-center gap-2.5">
             <span className="w-6 h-6 rounded bg-sage-500 shrink-0" />
@@ -66,11 +73,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         </div>
 
-        {/* Nav */}
         <nav className="flex-1 px-2.5 py-3 space-y-0.5">
           {NAV.map((item) => {
-            const active = item.href === "/dashboard"
-              ? pathname === "/dashboard"
+            const active = item.href === "/client"
+              ? pathname === "/client"
               : pathname.startsWith(item.href);
             return (
               <Link
@@ -92,7 +98,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           })}
         </nav>
 
-        {/* User */}
         <div className="px-2.5 py-3 border-t border-black/[0.05]">
           <div className="flex items-center gap-2.5 px-2.5 py-2">
             <div className="w-7 h-7 rounded-full bg-sage-100 flex items-center justify-center text-xs font-semibold text-sage-700 shrink-0">
@@ -111,7 +116,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
       </aside>
 
-      {/* Main */}
       <main className="flex-1 min-w-0 overflow-y-auto">
         {ready ? children : (
           <div className="flex items-center justify-center h-full">

@@ -1,19 +1,23 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 
-export default function LoginPage() {
-  const router = useRouter();
+function LoginForm() {
+  const router       = useRouter();
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError]       = useState<string | null>(null);
   const [loading, setLoading]   = useState(false);
 
+  const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
-    if (localStorage.getItem("access_token")) router.replace("/dashboard");
+    if (!localStorage.getItem("access_token")) return;
+    api.auth.me()
+      .then((u) => router.replace(u.role === "client" ? "/client" : "/dashboard"))
+      .catch(() => {});
   }, [router]);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -22,7 +26,8 @@ export default function LoginPage() {
     setError(null);
     try {
       await api.auth.login(email, password);
-      router.push("/dashboard");
+      const me = await api.auth.me();
+      router.push(me.role === "client" ? "/client" : "/dashboard");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Login failed");
     } finally {
@@ -34,7 +39,6 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-[340px]">
 
-        {/* Logo */}
         <div className="mb-10 text-center">
           <span className="inline-block w-9 h-9 rounded-lg bg-sage-500 mb-4" />
           <h1 className="text-xl font-semibold text-ink">NutriSync</h1>
@@ -80,5 +84,13 @@ export default function LoginPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginForm />
+    </Suspense>
   );
 }

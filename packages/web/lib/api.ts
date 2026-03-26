@@ -111,6 +111,7 @@ export const api = {
   },
 
   clients: {
+    me:          ()            => request<Client>("/api/v1/clients/me"),
     list:        ()            => request<Client[]>("/api/v1/clients"),
     get:         (id: string)  => request<Client>(`/api/v1/clients/${id}`),
     unassigned:  ()            => request<Client[]>("/api/v1/clients/unassigned"),
@@ -121,6 +122,16 @@ export const api = {
   },
 
   logs: {
+    list: (days = 7, log_type?: string) => {
+      const p = new URLSearchParams({ days: String(days) });
+      if (log_type) p.set("log_type", log_type);
+      return request<HealthLog[]>(`/api/v1/logs?${p}`);
+    },
+    create: (log_type: string, payload: Record<string, unknown>, logged_at?: string) =>
+      request<{ id: string; logged_at: string }>("/api/v1/logs", {
+        method: "POST",
+        body: JSON.stringify({ log_type, payload, logged_at }),
+      }),
     forClient: (clientId: string, days = 30, log_type?: string) => {
       const p = new URLSearchParams({ days: String(days) });
       if (log_type) p.set("log_type", log_type);
