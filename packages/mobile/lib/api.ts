@@ -74,5 +74,23 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ message, ingredients, session_id }),
       }),
+
+    analyzePhoto: (
+      image_b64: string,
+      opts: { mime_type?: string; save_log?: boolean } = {},
+    ) =>
+      request<{
+        foods: Array<{ name: string; portion: string; calories: number; protein_g: number; carbs_g: number; fat_g: number; confidence: string }>;
+        totals: { calories: number; protein_g: number; carbs_g: number; fat_g: number };
+        log_id: string | null;
+        note: string | null;
+      }>("/api/v1/ai/analyze-photo", {
+        method: "POST",
+        body: JSON.stringify({
+          image_b64,
+          mime_type: opts.mime_type ?? "image/jpeg",
+          save_log: opts.save_log ?? false,
+        }),
+      }),
   },
 };

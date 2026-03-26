@@ -51,6 +51,11 @@ class ClientProfile(Base):
     # {"calories": 2000, "protein_g": 150, "carbs_g": 200, "fat_g": 60}
     assigned_consultant_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
 
+    # Gamification — streak tracking
+    current_streak: Mapped[int] = mapped_column(Integer, default=0)
+    longest_streak: Mapped[int] = mapped_column(Integer, default=0)
+    last_logged_date: Mapped[str | None] = mapped_column(String)  # ISO date "YYYY-MM-DD"
+
     user: Mapped["User"] = relationship(
         back_populates="profile", foreign_keys="[ClientProfile.user_id]"
     )
@@ -74,8 +79,11 @@ class HealthLog(Base):
     )
     # meal:      {name, calories, protein_g, carbs_g, fat_g, ingredients[]}
     # activity:  {type, duration_min, steps, avg_heart_rate, source}
-    # biometric: {weight_kg, body_fat_pct, source}
+    # biometric: {weight_kg, body_fat_pct, source}  ← encrypted at rest (see services/encryption.py)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # HIPAA: biometric payloads are Fernet-encrypted; raw ciphertext stored here
+    encrypted_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_encrypted: Mapped[bool] = mapped_column(Boolean, default=False)
 
     user: Mapped["User"] = relationship(back_populates="health_logs")
 

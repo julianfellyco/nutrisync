@@ -131,5 +131,7 @@ def _serialize(user: User, profile: ClientProfile) -> dict:
             "dietary_restrictions":   profile.dietary_restrictions,
             "macro_targets":          profile.macro_targets,
             "assigned_consultant_id": profile.assigned_consultant_id,
+            "current_streak": profile.current_streak,
+            "longest_streak": profile.longest_streak,
         },
     }

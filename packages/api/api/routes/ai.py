@@ -383,3 +383,160 @@ async def chat(
     await db.commit()
 
     return ChatResponse(session_id=session.id, reply=reply)
+
+
+# ── Photo-to-Macro Analysis ────────────────────────────────────────────────────
+
+class PhotoAnalysisRequest(BaseModel):
+    image_b64: str           # base64-encoded image bytes
+    mime_type: str = "image/jpeg"
+    save_log: bool = False   # if True, auto-create a meal HealthLog
+    on_behalf_of_client_id: str | None = None  # consultants only
+
+
+class DetectedFood(BaseModel):
+    name: str
+    portion: str
+    calories: float
+    protein_g: float
+    carbs_g: float
+    fat_g: float
+    confidence: str   # "high" | "medium" | "low"
+
+
+class PhotoAnalysisResponse(BaseModel):
+    foods: list[DetectedFood]
+    totals: dict
+    log_id: str | None = None
+    note: str | None = None
+
+
+_PHOTO_PROMPT = """\
+You are a precise nutrition analyst. Analyse the meal photo and return ONLY valid JSON — no markdown, no explanation.
+
+JSON schema:
+{
+  "foods": [
+    {
+      "name": "string",
+      "portion": "string (e.g. '150g', '1 cup', '1 medium')",
+      "calories": number,
+      "protein_g": number,
+      "carbs_g": number,
+      "fat_g": number,
+      "confidence": "high|medium|low"
+    }
+  ],
+  "totals": { "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number },
+  "note": "string or null  (mention any assumptions, e.g. sauce type, cooking method)"
+}
+
+Rules:
+- Identify every distinct food item visible.
+- Estimate portion sizes visually — use plate size, utensils, and context clues.
+- Use standard nutritional values per 100g scaled to the estimated portion.
+- Mark confidence 'low' if the food is partially obscured or difficult to identify.
+- Return only the JSON object. No preamble, no trailing text.
+"""
+
+
+@router.post("/analyze-photo", response_model=PhotoAnalysisResponse)
+async def analyze_photo(
+    body: PhotoAnalysisRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await _check_rate_limit(current_user.id)
+
+    # Validate consultant access if on_behalf_of
+    target_user_id = current_user.id
+    if body.on_behalf_of_client_id:
+        if current_user.role != "consultant":
+            raise HTTPException(status_code=403, detail="Only consultants can use on_behalf_of_client_id")
+        cp = (await db.execute(
+            select(ClientProfile).where(
+                ClientProfile.user_id == body.on_behalf_of_client_id,
+                ClientProfile.assigned_consultant_id == current_user.id,
+            )
+        )).scalar_one_or_none()
+        if not cp:
+            raise HTTPException(status_code=403, detail="Not your client")
+        target_user_id = body.on_behalf_of_client_id
+
+    try:
+        response = await client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": body.mime_type,
+                            "data": body.image_b64,
+                        },
+                    },
+                    {"type": "text", "text": _PHOTO_PROMPT},
+                ],
+            }],
+        )
+    except anthropic.APIError as exc:
+        log.error("ai.photo_error", exc=str(exc), user_id=current_user.id)
+        raise HTTPException(status_code=502, detail="AI vision service unavailable")
+
+    raw = response.content[0].text.strip()
+
+    # Strip markdown code fences if Claude wraps output
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="Could not parse vision response")
+
+    foods = [DetectedFood(**f) for f in data.get("foods", [])]
+    totals = data.get("totals", {})
+    note   = data.get("note")
+
+    log_id: str | None = None
+    if body.save_log and foods:
+        from api.db.models import HealthLog
+        from api.services.encryption import should_encrypt
+        meal_payload = {
+            "name":        ", ".join(f.name for f in foods),
+            "calories":    totals.get("calories", 0),
+            "protein_g":   totals.get("protein_g", 0),
+            "carbs_g":     totals.get("carbs_g", 0),
+            "fat_g":       totals.get("fat_g", 0),
+            "ingredients": [f"{f.name} ({f.portion})" for f in foods],
+            "source":      "photo_ai",
+        }
+        entry = HealthLog(
+            user_id=target_user_id,
+            log_type="meal",
+            payload=meal_payload,
+            is_encrypted=False,
+        )
+        db.add(entry)
+
+        # Update streak
+        from api.routes.logs import _update_streak
+        today_str = datetime.now(timezone.utc).date().isoformat()
+        await _update_streak(target_user_id, today_str, db)
+
+        await db.commit()
+        await db.refresh(entry)
+        log_id = entry.id
+
+        from api.services.realtime import publish_update
+        await publish_update(target_user_id, {
+            "event": "new_log",
+            "log_type": "meal",
+            "logged_at": entry.logged_at.isoformat(),
+            "payload": meal_payload,
+        })
+
+    return PhotoAnalysisResponse(foods=foods, totals=totals, log_id=log_id, note=note)

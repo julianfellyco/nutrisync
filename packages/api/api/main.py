@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.config import settings
 from api.db.engine import engine
-from api.routes import auth, logs, ai, clients, plans
+from api.routes import auth, logs, ai, clients, plans, insights
 from api.ws import websocket_handler
 
 log = structlog.get_logger()
@@ -49,8 +49,9 @@ app.add_middleware(
 app.include_router(auth.router,    prefix="/api/v1")
 app.include_router(logs.router,    prefix="/api/v1")
 app.include_router(ai.router,      prefix="/api/v1")
-app.include_router(clients.router, prefix="/api/v1")
-app.include_router(plans.router,   prefix="/api/v1")
+app.include_router(clients.router,  prefix="/api/v1")
+app.include_router(plans.router,    prefix="/api/v1")
+app.include_router(insights.router, prefix="/api/v1")
 
 
 @app.websocket("/ws")

@@ -142,10 +142,40 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ message, ...opts }),
       }),
+
+    analyzePhoto: (image_b64: string, opts: { mime_type?: string; save_log?: boolean; on_behalf_of_client_id?: string } = {}) =>
+      request<PhotoAnalysisResponse>("/api/v1/ai/analyze-photo", {
+        method: "POST",
+        body: JSON.stringify({ image_b64, mime_type: opts.mime_type ?? "image/jpeg", ...opts }),
+      }),
+  },
+
+  insights: {
+    list: (clientId: string) =>
+      request<{ client_id: string; insights: InsightCard[] }>(`/api/v1/insights/${clientId}`),
   },
 };
 
 // ── Shared types ───────────────────────────────────────────────────────────────
+export interface PhotoAnalysisResponse {
+  foods: Array<{
+    name: string; portion: string; calories: number;
+    protein_g: number; carbs_g: number; fat_g: number; confidence: string;
+  }>;
+  totals: { calories: number; protein_g: number; carbs_g: number; fat_g: number };
+  log_id: string | null;
+  note: string | null;
+}
+
+export interface InsightCard {
+  id: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  body: string;
+  action: string;
+  metric?: Record<string, unknown>;
+}
+
 export interface Client {
   id: string;
   name: string;
@@ -158,6 +188,8 @@ export interface Client {
     dietary_restrictions: string[];
     macro_targets: { calories: number; protein_g: number; carbs_g: number; fat_g: number };
     assigned_consultant_id: string;
+    current_streak?: number;
+    longest_streak?: number;
   } | null;
 }
 

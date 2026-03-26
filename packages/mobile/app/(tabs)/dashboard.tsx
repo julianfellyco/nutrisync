@@ -22,6 +22,7 @@ interface LogSummary {
   protein_g: number;
   steps: number;
   avg_heart_rate: number;
+  current_streak: number;
   meals_logged: number;
 }
 
@@ -39,7 +40,7 @@ function sumLogs(logs: any[]): LogSummary {
       }
       return acc;
     },
-    { calories: 0, protein_g: 0, steps: 0, avg_heart_rate: 0, meals_logged: 0 },
+    { calories: 0, protein_g: 0, steps: 0, avg_heart_rate: 0, meals_logged: 0, current_streak: 0 },
   );
 }
 
@@ -82,7 +83,8 @@ export default function DashboardScreen() {
           <StatCard label="Protein"   value={`${Math.round(summary.protein_g)} g`} />
           <StatCard label="Steps"     value={summary.steps.toLocaleString()} />
           <StatCard label="Heart Rate" value={summary.avg_heart_rate ? `${Math.round(summary.avg_heart_rate)} bpm` : "—"} />
-          <StatCard label="Meals"     value={String(summary.meals_logged)} />
+          <StatCard label="Meals" value={String(summary.meals_logged)} />
+          {summary.current_streak > 0 && <StatCard label="🔥 Streak" value={String(summary.current_streak) + ' day streak'} />}
         </View>
       )}
 

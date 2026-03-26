@@ -8,15 +8,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.engine import get_db
-from api.db.models import AuditEvent, HealthLog, User
+from api.db.models import AuditEvent, ClientProfile, HealthLog, User
 from api.middleware.auth import get_current_user, require_consultant
+from api.services.encryption import decrypt_payload, encrypt_payload, should_encrypt
 from api.services.realtime import publish_update
 
 router = APIRouter(prefix="/logs", tags=["logs"])
 
 
 class LogCreateRequest(BaseModel):
-    log_type: str          # "meal" | "activity" | "biometric"
+    log_type: str
     payload: dict
     logged_at: datetime | None = None
 
@@ -27,25 +28,44 @@ async def create_log(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    log = HealthLog(
-        user_id=current_user.id,
-        log_type=body.log_type,
-        payload=body.payload,
-        logged_at=body.logged_at or datetime.now(timezone.utc),
-    )
-    db.add(log)
-    await db.commit()
-    await db.refresh(log)
+    logged_at = body.logged_at or datetime.now(timezone.utc)
+    encrypted = should_encrypt(body.log_type)
 
-    # Notify all WebSocket subscribers (consultant portal + other devices)
+    if encrypted:
+        blob = encrypt_payload(body.payload)
+        log_entry = HealthLog(
+            user_id=current_user.id,
+            log_type=body.log_type,
+            logged_at=logged_at,
+            payload={"encrypted": True},
+            encrypted_payload=blob,
+            is_encrypted=True,
+        )
+    else:
+        log_entry = HealthLog(
+            user_id=current_user.id,
+            log_type=body.log_type,
+            logged_at=logged_at,
+            payload=body.payload,
+            is_encrypted=False,
+        )
+
+    db.add(log_entry)
+
+    if body.log_type == "meal":
+        await _update_streak(current_user.id, logged_at.date().isoformat(), db)
+
+    await db.commit()
+    await db.refresh(log_entry)
+
     await publish_update(current_user.id, {
         "event": "new_log",
-        "log_type": log.log_type,
-        "logged_at": log.logged_at.isoformat(),
-        "payload": log.payload,
+        "log_type": log_entry.log_type,
+        "logged_at": log_entry.logged_at.isoformat(),
+        "payload": body.payload,
     })
 
-    return {"id": log.id, "logged_at": log.logged_at}
+    return {"id": log_entry.id, "logged_at": log_entry.logged_at}
 
 
 @router.get("")
@@ -66,29 +86,24 @@ async def get_my_logs(
         query = query.where(HealthLog.log_type == log_type)
 
     result = await db.execute(query)
-    logs = result.scalars().all()
-    return [{"id": l.id, "log_type": l.log_type, "logged_at": l.logged_at, "payload": l.payload}
-            for l in logs]
+    return [_serialize_log(l) for l in result.scalars().all()]
 
 
 @router.get("/client/{client_id}")
 async def get_client_logs(
     client_id: str,
     days: int = Query(default=30, le=365),
+    log_type: str | None = Query(default=None),
     consultant: User = Depends(require_consultant),
     db: AsyncSession = Depends(get_db),
 ):
-    """Consultant-only: fetch a specific client's logs.
-    Enforces assignment — consultant can only read their own clients.
-    """
-    from api.db.models import ClientProfile
-    result = await db.execute(
+    cp = (await db.execute(
         select(ClientProfile).where(
             ClientProfile.user_id == client_id,
             ClientProfile.assigned_consultant_id == consultant.id,
         )
-    )
-    if not result.scalar_one_or_none():
+    )).scalar_one_or_none()
+    if not cp:
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="Not your client")
 
@@ -99,10 +114,12 @@ async def get_client_logs(
         .where(HealthLog.logged_at >= since)
         .order_by(HealthLog.logged_at.asc())
     )
+    if log_type:
+        query = query.where(HealthLog.log_type == log_type)
+
     result = await db.execute(query)
     logs = result.scalars().all()
 
-    # Audit: consultant accessed client records
     db.add(AuditEvent(
         actor_id=consultant.id,
         target_user_id=client_id,
@@ -111,5 +128,49 @@ async def get_client_logs(
     ))
     await db.commit()
 
-    return [{"id": l.id, "log_type": l.log_type, "logged_at": l.logged_at, "payload": l.payload}
-            for l in logs]
+    return [_serialize_log(l) for l in logs]
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _serialize_log(log: HealthLog) -> dict:
+    if log.is_encrypted and log.encrypted_payload:
+        try:
+            payload = decrypt_payload(log.encrypted_payload)
+        except Exception:
+            payload = {"error": "decryption failed — check ENCRYPTION_KEY"}
+    else:
+        payload = log.payload
+    return {
+        "id":        log.id,
+        "log_type":  log.log_type,
+        "logged_at": log.logged_at,
+        "payload":   payload,
+    }
+
+
+async def _update_streak(user_id: str, today_str: str, db) -> None:
+    result = await db.execute(
+        select(ClientProfile).where(ClientProfile.user_id == user_id)
+    )
+    profile = result.scalar_one_or_none()
+    if profile is None:
+        return
+
+    if profile.last_logged_date == today_str:
+        return
+
+    yesterday = (
+        datetime.strptime(today_str, "%Y-%m-%d") - timedelta(days=1)
+    ).strftime("%Y-%m-%d")
+
+    if profile.last_logged_date == yesterday:
+        profile.current_streak = (profile.current_streak or 0) + 1
+    else:
+        profile.current_streak = 1
+
+    if (profile.current_streak or 0) > (profile.longest_streak or 0):
+        profile.longest_streak = profile.current_streak
+
+    profile.last_logged_date = today_str
+    db.add(profile)

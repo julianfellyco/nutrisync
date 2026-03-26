@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     usda_api_key: str = "DEMO_KEY"
 
+    # Field-level encryption for PHI (biometric data)
+    # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    encryption_key: str = ""
+    encrypt_biometrics: bool = True
+
     # Comma-separated list of allowed CORS origins
     allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:19006"
 

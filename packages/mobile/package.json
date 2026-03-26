@@ -3,12 +3,12 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "scripts": {
-    "start":   "expo start",
+    "start": "expo start",
     "android": "expo run:android",
-    "ios":     "expo run:ios",
-    "build:dev:ios":     "eas build --profile development --platform ios",
+    "ios": "expo run:ios",
+    "build:dev:ios": "eas build --profile development --platform ios",
     "build:dev:android": "eas build --profile development --platform android",
-    "build:preview":     "eas build --profile preview --platform all"
+    "build:preview": "eas build --profile preview --platform all"
   },
   "dependencies": {
     "expo": "~52.0.0",
@@ -20,7 +20,9 @@
     "react-native": "0.76.5",
     "@react-native-async-storage/async-storage": "^2.1.0",
     "react-native-health": "^1.19.0",
-    "@react-native-google-fit/google-fit": "^0.23.0"
+    "@react-native-google-fit/google-fit": "^0.23.0",
+    "expo-camera": "~16.0.0",
+    "expo-image-picker": "~16.0.0"
   },
   "devDependencies": {
     "@babel/core": "^7.25.0",

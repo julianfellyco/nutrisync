@@ -19,6 +19,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         "NutriSync reads your step count and heart rate to sync your daily activity.",
       NSHealthUpdateUsageDescription:
         "NutriSync saves meal logs to your Health app.",
+      NSCameraUsageDescription:
+        "NutriSync uses the camera to analyse your meals and identify food items.",
+      NSPhotoLibraryUsageDescription:
+        "NutriSync accesses your photo library so you can log meals from existing photos.",
     },
     entitlements: {
       "com.apple.developer.healthkit": true,
@@ -30,12 +34,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     package: "com.nutrisync.app",
     adaptiveIcon: { foregroundImage: "./assets/adaptive-icon.png", backgroundColor: "#ffffff" },
     permissions: [
-      // Google Fit / Health Connect
       "android.permission.ACTIVITY_RECOGNITION",
       "android.permission.BODY_SENSORS",
       "android.permission.health.READ_STEPS",
       "android.permission.health.READ_HEART_RATE",
       "android.permission.health.READ_WEIGHT",
+      "android.permission.CAMERA",
+      "android.permission.READ_EXTERNAL_STORAGE",
     ],
   },
 
@@ -56,6 +61,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     ],
     // Task manager required by background-fetch
     "expo-task-manager",
+    "expo-camera",
+    "expo-image-picker",
   ],
 
   extra: {
