@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+
+# Env files
+.env
+.env.local
+.env.*.local
+
+# Next.js
+packages/web/.next/
+packages/web/out/
+
+# Node
+node_modules/
+packages/web/node_modules/
+packages/mobile/node_modules/
+
+# Misc
+.DS_Store
+*.log
+/tmp/
