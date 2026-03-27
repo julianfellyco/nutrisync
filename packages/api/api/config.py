@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str = "redis://localhost:6379/0"
 
-    jwt_secret: str = "dev-secret-change-in-production"
+    jwt_secret: str  # required — no default; fails fast if missing
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
     refresh_token_expire_days: int = 30

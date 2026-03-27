@@ -8,10 +8,14 @@ dist/
 build/
 .pytest_cache/
 
-# Env files
+# Env files — never commit real secrets
 .env
 .env.local
 .env.*.local
+infra/.env
+packages/api/.env
+packages/mobile/.env
+packages/web/.env.local
 
 # Next.js
 packages/web/.next/
