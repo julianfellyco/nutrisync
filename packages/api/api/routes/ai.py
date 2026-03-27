@@ -29,6 +29,7 @@ from api.db.models import AISession, ClientProfile, HealthLog, User
 from api.middleware.auth import get_current_user
 from api.services import usda as usda_svc
 from api.services.realtime import get_redis
+from api.services.session_manager import trim_session
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 log = structlog.get_logger()
@@ -161,18 +162,27 @@ async def _handle_search_usda(tool_input: dict) -> str:
 
 
 async def _handle_save_recipe(tool_input: dict, user_id: str, db: AsyncSession) -> str:
+    from api.schemas.logs import MealPayload
+    from pydantic import ValidationError
+
+    raw_payload = {
+        "name":        tool_input.get("name", "AI Recipe")[:200],
+        "calories":    min(max(float(tool_input.get("calories", 0)), 0), 10000),
+        "protein_g":   min(max(float(tool_input.get("protein_g", 0)), 0), 1000),
+        "carbs_g":     min(max(float(tool_input.get("carbs_g", 0)), 0), 1000),
+        "fat_g":       min(max(float(tool_input.get("fat_g", 0)), 0), 1000),
+        "ingredients": [str(i)[:200] for i in tool_input.get("ingredients", [])[:50]],
+        "source":      "ai_generated",
+    }
+    try:
+        validated = MealPayload.model_validate(raw_payload)
+    except ValidationError as exc:
+        return json.dumps({"error": f"Invalid recipe data: {exc.error_count()} validation error(s)"})
+
     log_entry = HealthLog(
         user_id=user_id,
         log_type="meal",
-        payload={
-            "name":        tool_input["name"],
-            "calories":    tool_input["calories"],
-            "protein_g":   tool_input["protein_g"],
-            "carbs_g":     tool_input["carbs_g"],
-            "fat_g":       tool_input["fat_g"],
-            "ingredients": tool_input.get("ingredients", []),
-            "source":      "ai_generated",
-        },
+        payload=validated.model_dump(exclude_none=False),
     )
     db.add(log_entry)
     await db.commit()
@@ -310,10 +320,10 @@ async def _run_agent_loop(
 # ── Route ──────────────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
-    session_id: str | None = None
-    message: str
-    ingredients: list[str] = []
-    on_behalf_of_client_id: str | None = None  # consultants only
+    session_id: str | None = Field(default=None, max_length=100)
+    message: str = Field(..., min_length=1, max_length=4000)
+    ingredients: list[str] = Field(default_factory=list, max_length=50)
+    on_behalf_of_client_id: str | None = Field(default=None, max_length=100)  # consultants only
 
 
 class ChatResponse(BaseModel):
@@ -370,6 +380,11 @@ async def chat(
         {"role": "user", "content": user_text}
     ]
 
+    # Trim session if it has grown large; also log estimated token usage
+    messages, estimated_tokens = await trim_session(messages, client)
+    log.info("ai.request", user_id=current_user.id, estimated_tokens=estimated_tokens,
+             message_count=len(messages))
+
     system = await _build_system_prompt(current_user, db, subject_id)
 
     try:
@@ -379,7 +394,8 @@ async def chat(
         raise HTTPException(status_code=502, detail="AI service unavailable")
 
     # Persist updated history (store only role+content for compactness)
-    session.messages = messages + [{"role": "assistant", "content": reply}]
+    full_messages = messages + [{"role": "assistant", "content": reply}]
+    session.messages = full_messages
     await db.commit()
 
     return ChatResponse(session_id=session.id, reply=reply)

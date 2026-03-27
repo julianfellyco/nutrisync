@@ -14,6 +14,7 @@
 import { useCallback, useState } from "react";
 import { Platform } from "react-native";
 import { api } from "../lib/api";
+import { enqueue } from "../lib/offlineQueue";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -164,12 +165,28 @@ export function useBiometricSync() {
           avg_heart_rate: data.avgHeartRate > 0 ? Math.round(data.avgHeartRate) : undefined,
           source: Platform.OS === "ios" ? "healthkit" : "googlefit",
         };
-        await api.logs.create("biometric", payload, date.toISOString());
+        try {
+          await api.logs.create("biometric", payload, date.toISOString());
+        } catch {
+          await enqueue("/api/v1/logs", "POST", {
+            log_type: "biometric",
+            payload,
+            logged_at: date.toISOString(),
+          });
+        }
       }
 
       // Post individual workouts
       for (const workout of data.workouts) {
-        await api.logs.create("activity", workout, date.toISOString());
+        try {
+          await api.logs.create("activity", workout, date.toISOString());
+        } catch {
+          await enqueue("/api/v1/logs", "POST", {
+            log_type: "activity",
+            payload: workout,
+            logged_at: date.toISOString(),
+          });
+        }
       }
 
       setLastSynced(new Date());

@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.engine import get_db
 from api.db.models import AuditEvent, ClientProfile, HealthLog, User
 from api.middleware.auth import get_current_user, require_consultant
+from api.schemas.logs import VALID_LOG_TYPES, validate_payload
 from api.services.encryption import decrypt_payload, encrypt_payload, should_encrypt
 from api.services.realtime import publish_update
 
@@ -17,9 +18,16 @@ router = APIRouter(prefix="/logs", tags=["logs"])
 
 
 class LogCreateRequest(BaseModel):
-    log_type: str
+    log_type: str = Field(..., max_length=50)
     payload: dict
     logged_at: datetime | None = None
+
+    @field_validator("log_type")
+    @classmethod
+    def check_log_type(cls, v: str) -> str:
+        if v not in VALID_LOG_TYPES:
+            raise ValueError(f"log_type must be one of: {', '.join(sorted(VALID_LOG_TYPES))}")
+        return v
 
 
 @router.post("", status_code=201)
@@ -28,11 +36,18 @@ async def create_log(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Validate payload against the schema for this log_type
+    try:
+        validated = validate_payload(body.log_type, body.payload)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    clean_payload = validated.model_dump(exclude_none=False)
     logged_at = body.logged_at or datetime.now(timezone.utc)
     encrypted = should_encrypt(body.log_type)
 
     if encrypted:
-        blob = encrypt_payload(body.payload)
+        blob = encrypt_payload(clean_payload)
         log_entry = HealthLog(
             user_id=current_user.id,
             log_type=body.log_type,
@@ -46,7 +61,7 @@ async def create_log(
             user_id=current_user.id,
             log_type=body.log_type,
             logged_at=logged_at,
-            payload=body.payload,
+            payload=clean_payload,
             is_encrypted=False,
         )
 
@@ -62,7 +77,7 @@ async def create_log(
         "event": "new_log",
         "log_type": log_entry.log_type,
         "logged_at": log_entry.logged_at.isoformat(),
-        "payload": body.payload,
+        "payload": clean_payload,
     })
 
     return {"id": log_entry.id, "logged_at": log_entry.logged_at}
@@ -72,6 +87,8 @@ async def create_log(
 async def get_my_logs(
     days: int = Query(default=7, le=365),
     log_type: str | None = Query(default=None),
+    limit: int = Query(default=50, le=200),
+    before: datetime | None = Query(default=None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -84,9 +101,22 @@ async def get_my_logs(
     )
     if log_type:
         query = query.where(HealthLog.log_type == log_type)
+    if before:
+        query = query.where(HealthLog.logged_at < before)
 
+    query = query.limit(limit + 1)
     result = await db.execute(query)
-    return [_serialize_log(l) for l in result.scalars().all()]
+    rows = result.scalars().all()
+
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    next_cursor = rows[-1].logged_at.isoformat() if has_more and rows else None
+
+    return {
+        "data": [_serialize_log(l) for l in rows],
+        "next_cursor": next_cursor,
+        "has_more": has_more,
+    }
 
 
 @router.get("/client/{client_id}")
@@ -94,6 +124,8 @@ async def get_client_logs(
     client_id: str,
     days: int = Query(default=30, le=365),
     log_type: str | None = Query(default=None),
+    limit: int = Query(default=50, le=200),
+    before: datetime | None = Query(default=None),
     consultant: User = Depends(require_consultant),
     db: AsyncSession = Depends(get_db),
 ):
@@ -104,7 +136,6 @@ async def get_client_logs(
         )
     )).scalar_one_or_none()
     if not cp:
-        from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="Not your client")
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
@@ -116,9 +147,16 @@ async def get_client_logs(
     )
     if log_type:
         query = query.where(HealthLog.log_type == log_type)
+    if before:
+        query = query.where(HealthLog.logged_at < before)
 
+    query = query.limit(limit + 1)
     result = await db.execute(query)
-    logs = result.scalars().all()
+    rows = result.scalars().all()
+
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    next_cursor = rows[-1].logged_at.isoformat() if has_more and rows else None
 
     db.add(AuditEvent(
         actor_id=consultant.id,
@@ -128,7 +166,11 @@ async def get_client_logs(
     ))
     await db.commit()
 
-    return [_serialize_log(l) for l in logs]
+    return {
+        "data": [_serialize_log(l) for l in rows],
+        "next_cursor": next_cursor,
+        "has_more": has_more,
+    }
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

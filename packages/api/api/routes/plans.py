@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,16 +13,16 @@ router = APIRouter(prefix="/plans", tags=["plans"])
 
 
 class PlanBody(BaseModel):
-    client_id: str
-    plan_type: str        # "meal" | "workout"
-    valid_from: str
-    valid_to: str
+    client_id: str = Field(..., max_length=100)
+    plan_type: str = Field(..., max_length=20)   # "meal" | "workout"
+    valid_from: str = Field(..., max_length=20)
+    valid_to: str = Field(..., max_length=20)
     content: dict
 
 
 class PlanPatch(BaseModel):
-    valid_from: str | None = None
-    valid_to: str | None = None
+    valid_from: str | None = Field(default=None, max_length=20)
+    valid_to: str | None = Field(default=None, max_length=20)
     content: dict | None = None
 
 

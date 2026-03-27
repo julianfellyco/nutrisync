@@ -12,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.config import settings
 from api.db.engine import engine
+from api.middleware.error_handler import global_exception_handler
+from api.middleware.request_id import RequestIDMiddleware
 from api.routes import auth, logs, ai, clients, plans, insights
 from api.ws import websocket_handler
 
@@ -38,6 +40,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="NutriSync API", version="0.1.0", lifespan=lifespan)
 
+app.add_exception_handler(Exception, global_exception_handler)
+
+# RequestIDMiddleware must be added before CORS so the ID is available throughout
+app.add_middleware(RequestIDMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins_list,

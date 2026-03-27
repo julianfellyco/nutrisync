@@ -30,9 +30,12 @@ export default function ClientDetailPage() {
   const [logs, setLogs]       = useState<HealthLog[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
   const fetchLogs = useCallback(async () => {
-    const data = await api.logs.forClient(clientId, 30);
-    setLogs(data);
+    const page = await api.logs.forClient(clientId, 30);
+    setLogs(page.data);
+    setLastUpdated(new Date());
   }, [clientId]);
 
   useEffect(() => {
@@ -81,6 +84,11 @@ export default function ClientDetailPage() {
               <h1 className="text-lg font-semibold text-ink">{client.name}</h1>
               {connected && <span className="dot-live" title="Live connection" />}
             </div>
+            {lastUpdated && (
+              <p className="text-2xs text-ink-4 mt-0.5">
+                Updated {lastUpdated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </p>
+            )}
             <p className="text-xs text-ink-3 mt-0.5">
               {client.profile?.fitness_goal?.replace(/_/g, " ") ?? "No goal set"}
               {client.profile?.dietary_restrictions?.length

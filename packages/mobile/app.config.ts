@@ -66,6 +66,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ],
 
   extra: {
-    eas: { projectId: "replace-with-your-eas-project-id" },
+    // TODO: run 'eas init' in packages/mobile to generate a real project ID
+    eas: { projectId: "TODO-run-eas-init" },
   },
 });

@@ -53,8 +53,8 @@ export default function ClientDashboard() {
       api.logs.list(1, "meal"),
       api.clients.me(),
     ])
-      .then(([mealLogs, client]) => {
-        setLogs(mealLogs as HealthLog[]);
+      .then(([logPage, client]) => {
+        setLogs(logPage.data);
         if (client.profile) setProfile(client.profile as ProfileData);
       })
       .catch(() => {})

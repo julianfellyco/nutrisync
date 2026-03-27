@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,12 +13,12 @@ router = APIRouter(prefix="/clients", tags=["clients"])
 
 
 class ClientProfileUpdate(BaseModel):
-    fitness_goal: str | None = None
-    dietary_restrictions: list[str] | None = None
+    fitness_goal: str | None = Field(default=None, max_length=100)
+    dietary_restrictions: list[str] | None = Field(default=None, max_length=30)
     macro_targets: dict | None = None
-    dob: str | None = None
-    height_cm: float | None = None
-    weight_kg: float | None = None
+    dob: str | None = Field(default=None, max_length=20)
+    height_cm: float | None = Field(default=None, ge=50, le=300)
+    weight_kg: float | None = Field(default=None, ge=20, le=500)
 
 
 class ClaimRequest(BaseModel):

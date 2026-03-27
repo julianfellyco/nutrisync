@@ -5,11 +5,12 @@
  * and posts step/heart-rate data to the API without waking the UI.
  */
 import { useEffect } from "react";
+import { AppState, Platform } from "react-native";
 import { Stack } from "expo-router";
 import * as BackgroundFetch from "expo-background-fetch";
 import * as TaskManager from "expo-task-manager";
-import { Platform } from "react-native";
 import { api } from "../lib/api";
+import { flush } from "../lib/offlineQueue";
 
 const BIOMETRIC_SYNC_TASK = "NUTRISYNC_BIOMETRIC_SYNC";
 
@@ -46,6 +47,17 @@ TaskManager.defineTask(BIOMETRIC_SYNC_TASK, async () => {
 
 export default function RootLayout() {
   useEffect(() => {
+    // Flush offline queue whenever the app comes to the foreground
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        flush().then(({ succeeded, failed }) => {
+          if (succeeded > 0 || failed > 0) {
+            console.log(`[OfflineQueue] flushed: ${succeeded} ok, ${failed} pending`);
+          }
+        });
+      }
+    });
+
     // Register the background task once the app has launched
     BackgroundFetch.registerTaskAsync(BIOMETRIC_SYNC_TASK, {
       minimumInterval: 30 * 60,   // 30 minutes
@@ -56,6 +68,7 @@ export default function RootLayout() {
     });
 
     return () => {
+      sub.remove();
       BackgroundFetch.unregisterTaskAsync(BIOMETRIC_SYNC_TASK).catch(() => {});
     };
   }, []);

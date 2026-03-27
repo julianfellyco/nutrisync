@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { ToastProvider } from "@/components/ui/toast";
 import clsx from "clsx";
 
 const NAV = [
@@ -113,11 +114,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       {/* Main */}
       <main className="flex-1 min-w-0 overflow-y-auto">
-        {ready ? children : (
-          <div className="flex items-center justify-center h-full">
-            <div className="w-4 h-4 rounded-full border-2 border-sage-200 border-t-sage-500 animate-spin" />
-          </div>
-        )}
+        <ToastProvider>
+          {ready ? children : (
+            <div className="flex items-center justify-center h-full">
+              <div className="w-4 h-4 rounded-full border-2 border-sage-200 border-t-sage-500 animate-spin" />
+            </div>
+          )}
+        </ToastProvider>
       </main>
     </div>
   );

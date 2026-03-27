@@ -122,20 +122,22 @@ export const api = {
   },
 
   logs: {
-    list: (days = 7, log_type?: string) => {
-      const p = new URLSearchParams({ days: String(days) });
+    list: (days = 7, log_type?: string, limit = 50, before?: string) => {
+      const p = new URLSearchParams({ days: String(days), limit: String(limit) });
       if (log_type) p.set("log_type", log_type);
-      return request<HealthLog[]>(`/api/v1/logs?${p}`);
+      if (before) p.set("before", before);
+      return request<LogPage>(`/api/v1/logs?${p}`);
     },
     create: (log_type: string, payload: Record<string, unknown>, logged_at?: string) =>
       request<{ id: string; logged_at: string }>("/api/v1/logs", {
         method: "POST",
         body: JSON.stringify({ log_type, payload, logged_at }),
       }),
-    forClient: (clientId: string, days = 30, log_type?: string) => {
-      const p = new URLSearchParams({ days: String(days) });
+    forClient: (clientId: string, days = 30, log_type?: string, limit = 50, before?: string) => {
+      const p = new URLSearchParams({ days: String(days), limit: String(limit) });
       if (log_type) p.set("log_type", log_type);
-      return request<HealthLog[]>(`/api/v1/logs/client/${clientId}?${p}`);
+      if (before) p.set("before", before);
+      return request<LogPage>(`/api/v1/logs/client/${clientId}?${p}`);
     },
   },
 
@@ -218,6 +220,12 @@ export interface HealthLog {
   log_type: "meal" | "activity" | "biometric";
   logged_at: string;
   payload: Record<string, unknown>;
+}
+
+export interface LogPage {
+  data: HealthLog[];
+  next_cursor: string | null;
+  has_more: boolean;
 }
 
 export interface Plan {

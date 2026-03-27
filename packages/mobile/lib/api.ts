@@ -61,10 +61,13 @@ export const api = {
         body: JSON.stringify({ log_type, payload, logged_at }),
       }),
 
-    list: (days = 7, log_type?: string) => {
-      const params = new URLSearchParams({ days: String(days) });
+    list: (days = 7, log_type?: string, limit = 50, before?: string) => {
+      const params = new URLSearchParams({ days: String(days), limit: String(limit) });
       if (log_type) params.set("log_type", log_type);
-      return request<unknown[]>(`/api/v1/logs?${params}`);
+      if (before) params.set("before", before);
+      return request<{ data: unknown[]; next_cursor: string | null; has_more: boolean }>(
+        `/api/v1/logs?${params}`,
+      );
     },
   },
 
