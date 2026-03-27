@@ -156,6 +156,46 @@ export const api = {
         body: JSON.stringify({ message, ...opts }),
       }),
 
+    /** SSE streaming chat — calls onDelta for each text chunk, resolves with full reply. */
+    chatStream: async (
+      message: string,
+      opts: { ingredients?: string[]; session_id?: string; on_behalf_of_client_id?: string } = {},
+      onDelta: (delta: string) => void = () => {},
+    ): Promise<{ session_id: string; reply: string }> => {
+      const token = getToken();
+      const res = await fetch(`${BASE}/api/v1/ai/chat/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ message, ...opts }),
+      });
+      if (!res.ok || !res.body) {
+        const body = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new ApiError(res.status, body.detail ?? "Stream failed");
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let fullText = "";
+      let sessionId = opts.session_id ?? "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        for (const line of chunk.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const frame = JSON.parse(line.slice(6));
+            if (frame.delta) { onDelta(frame.delta); fullText += frame.delta; }
+            if (frame.done) { fullText = frame.full_text ?? fullText; }
+          } catch { /* skip malformed frames */ }
+        }
+      }
+      return { session_id: sessionId, reply: fullText };
+    },
+
     analyzePhoto: (image_b64: string, opts: { mime_type?: string; save_log?: boolean; on_behalf_of_client_id?: string } = {}) =>
       request<PhotoAnalysisResponse>("/api/v1/ai/analyze-photo", {
         method: "POST",

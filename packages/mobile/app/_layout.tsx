@@ -9,8 +9,9 @@ import { AppState, Platform } from "react-native";
 import { Stack } from "expo-router";
 import * as BackgroundFetch from "expo-background-fetch";
 import * as TaskManager from "expo-task-manager";
+import NetInfo from "@react-native-community/netinfo";
 import { api } from "../lib/api";
-import { flush } from "../lib/offlineQueue";
+import { flush, getPendingCount } from "../lib/offlineQueue";
 
 const BIOMETRIC_SYNC_TASK = "NUTRISYNC_BIOMETRIC_SYNC";
 
@@ -48,14 +49,31 @@ TaskManager.defineTask(BIOMETRIC_SYNC_TASK, async () => {
 export default function RootLayout() {
   useEffect(() => {
     // Flush offline queue whenever the app comes to the foreground
-    const sub = AppState.addEventListener("change", (state) => {
+    const appStateSub = AppState.addEventListener("change", (state) => {
       if (state === "active") {
         flush().then(({ succeeded, failed }) => {
           if (succeeded > 0 || failed > 0) {
-            console.log(`[OfflineQueue] flushed: ${succeeded} ok, ${failed} pending`);
+            console.log(`[OfflineQueue] foreground flush: ${succeeded} ok, ${failed} pending`);
           }
         });
       }
+    });
+
+    // Also flush when network connectivity is restored
+    let wasOffline = false;
+    const netInfoSub = NetInfo.addEventListener((state) => {
+      const isOnline = state.isConnected && state.isInternetReachable;
+      if (isOnline && wasOffline) {
+        getPendingCount().then((count) => {
+          if (count > 0) {
+            console.log(`[OfflineQueue] reconnected — flushing ${count} queued item(s)`);
+            flush().then(({ succeeded, failed }) => {
+              console.log(`[OfflineQueue] reconnect flush: ${succeeded} ok, ${failed} pending`);
+            });
+          }
+        });
+      }
+      wasOffline = !isOnline;
     });
 
     // Register the background task once the app has launched
@@ -68,7 +86,8 @@ export default function RootLayout() {
     });
 
     return () => {
-      sub.remove();
+      appStateSub.remove();
+      netInfoSub();
       BackgroundFetch.unregisterTaskAsync(BIOMETRIC_SYNC_TASK).catch(() => {});
     };
   }, []);

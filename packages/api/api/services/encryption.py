@@ -3,15 +3,25 @@ Field-level encryption for Personal Health Information (PHI).
 
 Design:
   - Uses Fernet (AES-128-CBC + HMAC-SHA256) symmetric encryption.
-  - Key is read from settings.encryption_key (base64-encoded Fernet key).
+  - Key rotation: ENCRYPTION_KEY accepts a comma-separated list of Fernet keys.
+    The FIRST key is used for new encryptions; ALL keys are tried for decryption.
+    To rotate: prepend the new key and keep the old one — old data is decryptable
+    until you re-encrypt it with the new key.
   - If no key is configured, data is stored plaintext with a warning (dev mode only).
   - Only biometric logs are encrypted by default (weight, body fat, heart rate).
   - Encrypted blobs are stored as base64 strings, prefixed with "enc:" to
     distinguish them from plaintext payloads.
 
+Key rotation workflow:
+  1. Generate a new key:
+     python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+  2. Prepend it to ENCRYPTION_KEY (comma-separated): NEW_KEY,OLD_KEY
+  3. Deploy — new data is encrypted with NEW_KEY; old data still decrypts via OLD_KEY.
+  4. (Optional) Run a migration script to re-encrypt old records with NEW_KEY, then remove OLD_KEY.
+
 HIPAA alignment:
   - Encryption at rest for §164.312(a)(2)(iv) Technical Safeguard.
-  - Key stored separately from data (settings/env var, not in DB).
+  - Key stored separately from data (env var, not in DB).
   - Audit trail in AuditEvent table covers §164.312(b).
 """
 from __future__ import annotations
@@ -29,8 +39,12 @@ _warned = False
 
 
 def _get_fernet():
+    """
+    Return a MultiFernet if keys are configured, None otherwise.
+    MultiFernet tries the first key for encryption and all keys for decryption.
+    """
     global _fernet, _warned
-    if _fernet:
+    if _fernet is not None:
         return _fernet
     if not settings.encryption_key:
         if not _warned:
@@ -40,8 +54,16 @@ def _get_fernet():
             )
             _warned = True
         return None
-    from cryptography.fernet import Fernet
-    _fernet = Fernet(settings.encryption_key.encode())
+
+    from cryptography.fernet import Fernet, MultiFernet
+
+    raw_keys = [k.strip() for k in settings.encryption_key.split(",") if k.strip()]
+    if len(raw_keys) == 1:
+        _fernet = Fernet(raw_keys[0].encode())
+    else:
+        # MultiFernet: first key encrypts, all keys can decrypt (enables key rotation)
+        _fernet = MultiFernet([Fernet(k.encode()) for k in raw_keys])
+
     return _fernet
 
 
@@ -51,8 +73,7 @@ ENCRYPTED_PREFIX = "enc:"
 def encrypt_payload(payload: dict) -> str:
     """
     Encrypt a dict payload.
-    Returns a string: either "enc:<base64-fernet-token>" or plain JSON
-    if no encryption key is configured.
+    Returns "enc:<base64-fernet-token>" or plain JSON if no key is configured.
     """
     f = _get_fernet()
     raw = json.dumps(payload).encode()
@@ -64,8 +85,8 @@ def encrypt_payload(payload: dict) -> str:
 
 def decrypt_payload(blob: str) -> dict:
     """
-    Decrypt a payload blob back to a dict.
-    Handles both encrypted ("enc:...") and plaintext JSON strings.
+    Decrypt a payload blob. Handles both "enc:..." and plaintext JSON.
+    With MultiFernet, all configured keys are tried automatically.
     """
     if not blob.startswith(ENCRYPTED_PREFIX):
         return json.loads(blob)
@@ -75,12 +96,13 @@ def decrypt_payload(blob: str) -> dict:
         raise ValueError("Payload is encrypted but ENCRYPTION_KEY is not configured.")
 
     from cryptography.fernet import InvalidToken
+
     try:
         raw_b64 = blob[len(ENCRYPTED_PREFIX):]
         token = base64.b64decode(raw_b64)
         return json.loads(f.decrypt(token))
     except InvalidToken as e:
-        raise ValueError(f"Failed to decrypt payload: {e}") from e
+        raise ValueError(f"Failed to decrypt payload — check ENCRYPTION_KEY: {e}") from e
 
 
 def should_encrypt(log_type: str) -> bool:

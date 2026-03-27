@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from typing import AsyncGenerator
 
 import anthropic
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,6 +97,24 @@ TOOLS: list[anthropic.types.ToolParam] = [
                 "instructions":  {"type": "string"},
             },
             "required": ["name", "ingredients", "calories", "protein_g", "carbs_g", "fat_g"],
+        },
+    },
+    {
+        "name": "compare_plan_vs_intake",
+        "description": (
+            "Compare the user's actual logged intake for a given period against the targets "
+            "in their assigned nutrition plan. Returns a gap analysis showing which macros "
+            "are over or under target, useful for giving tailored advice."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Number of past days to average (default: 7)",
+                },
+            },
+            "required": [],
         },
     },
 ]
@@ -189,10 +209,66 @@ async def _handle_save_recipe(tool_input: dict, user_id: str, db: AsyncSession) 
     return json.dumps({"saved": True, "log_id": log_entry.id})
 
 
+async def _handle_compare_plan_vs_intake(tool_input: dict, user_id: str, db: AsyncSession) -> str:
+    """
+    Average the user's logged meal macros over the past N days and compare
+    against their macro_targets from ClientProfile.
+    """
+    days = int(tool_input.get("days", 7))
+    days = max(1, min(days, 90))
+
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    logs_result = await db.execute(
+        select(HealthLog).where(
+            HealthLog.user_id == user_id,
+            HealthLog.log_type == "meal",
+            HealthLog.logged_at >= since,
+        )
+    )
+    meal_logs = logs_result.scalars().all()
+
+    if not meal_logs:
+        return json.dumps({"error": f"No meal logs found in the past {days} days."})
+
+    total_days = max(days, 1)
+    totals: dict[str, float] = {"calories": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0}
+    for log_entry in meal_logs:
+        payload = log_entry.payload or {}
+        for key in totals:
+            totals[key] += float(payload.get(key, 0))
+
+    avg = {k: round(v / total_days, 1) for k, v in totals.items()}
+
+    profile = (await db.execute(
+        select(ClientProfile).where(ClientProfile.user_id == user_id)
+    )).scalar_one_or_none()
+    targets = profile.macro_targets if profile and profile.macro_targets else {}
+
+    gaps = {}
+    for key in avg:
+        target = targets.get(key, 0)
+        diff = round(avg[key] - target, 1)
+        pct = round((avg[key] / target * 100) if target else 0, 1)
+        gaps[key] = {
+            "avg_daily": avg[key],
+            "target":    target,
+            "diff":      diff,
+            "pct_of_target": pct,
+            "status": "over" if diff > 0 else ("under" if diff < 0 else "on_target"),
+        }
+
+    return json.dumps({
+        "period_days":  days,
+        "meals_logged": len(meal_logs),
+        "gap_analysis": gaps,
+    })
+
+
 TOOL_HANDLERS = {
-    "calculate_macros": _handle_calculate_macros,
-    "search_usda":      _handle_search_usda,
-    "save_recipe":      _handle_save_recipe,
+    "calculate_macros":      _handle_calculate_macros,
+    "search_usda":           _handle_search_usda,
+    "save_recipe":           _handle_save_recipe,
+    "compare_plan_vs_intake": _handle_compare_plan_vs_intake,
 }
 
 
@@ -297,7 +373,7 @@ async def _run_agent_loop(
             handler = TOOL_HANDLERS.get(tool_use.name)
             if not handler:
                 result_text = json.dumps({"error": f"Unknown tool: {tool_use.name}"})
-            elif tool_use.name == "save_recipe":
+            elif tool_use.name in ("save_recipe", "compare_plan_vs_intake"):
                 result_text = await handler(tool_use.input, user_id, db)
             else:
                 result_text = await handler(tool_use.input)
@@ -399,6 +475,139 @@ async def chat(
     await db.commit()
 
     return ChatResponse(session_id=session.id, reply=reply)
+
+
+# ── SSE Streaming Chat ─────────────────────────────────────────────────────────
+
+async def _stream_chat(
+    messages: list[dict],
+    system: str,
+) -> AsyncGenerator[str, None]:
+    """
+    Yield Server-Sent Event lines using Claude's streaming API.
+    Each text delta is sent as: data: {"delta": "..."}\n\n
+    A final done event is sent: data: {"done": true}\n\n
+    """
+    full_text = ""
+    async with client.messages.stream(
+        model="claude-sonnet-4-6",
+        max_tokens=2048,
+        system=system,
+        messages=messages,
+        tools=TOOLS,
+    ) as stream:
+        async for event in stream:
+            if hasattr(event, "type"):
+                if event.type == "content_block_delta":
+                    delta = getattr(event.delta, "text", "")
+                    if delta:
+                        full_text += delta
+                        yield f"data: {json.dumps({'delta': delta})}\n\n"
+
+    yield f"data: {json.dumps({'done': True, 'full_text': full_text})}\n\n"
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    body: ChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    SSE streaming version of /chat. Returns a text/event-stream response.
+    Each SSE frame: data: {"delta": "..."} or data: {"done": true, "full_text": "..."}
+
+    Note: Tool calls are executed before streaming begins — only the final
+    text response is streamed to the client.
+    """
+    await _check_rate_limit(current_user.id)
+
+    subject_id: str | None = None
+    if body.on_behalf_of_client_id:
+        if current_user.role != "consultant":
+            raise HTTPException(status_code=403, detail="Only consultants can use on_behalf_of_client_id")
+        cp = (await db.execute(
+            select(ClientProfile).where(
+                ClientProfile.user_id == body.on_behalf_of_client_id,
+                ClientProfile.assigned_consultant_id == current_user.id,
+            )
+        )).scalar_one_or_none()
+        if not cp:
+            raise HTTPException(status_code=403, detail="Not your client")
+        subject_id = body.on_behalf_of_client_id
+
+    session = None
+    if body.session_id:
+        result = await db.execute(
+            select(AISession).where(
+                AISession.id == body.session_id,
+                AISession.user_id == current_user.id,
+            )
+        )
+        session = result.scalar_one_or_none()
+
+    if not session:
+        session = AISession(user_id=current_user.id, messages=[])
+        db.add(session)
+        await db.flush()
+
+    user_text = body.message
+    if body.ingredients:
+        user_text = f"{body.message}\n\nIngredients I have: {', '.join(body.ingredients)}"
+
+    messages: list[dict] = list(session.messages) + [{"role": "user", "content": user_text}]
+    messages, _ = await trim_session(messages, client)
+    system = await _build_system_prompt(current_user, db, subject_id)
+
+    # Run tool-use iterations first (non-streaming), then stream final text response
+    try:
+        # Exhaust any tool calls using the standard loop up to the last user turn
+        for _ in range(7):
+            probe = await client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=2048,
+                system=system,
+                messages=messages,
+                tools=TOOLS,
+            )
+            tool_uses = [b for b in probe.content if b.type == "tool_use"]
+            if not tool_uses:
+                break  # final turn — will stream this
+
+            tool_results = []
+            for tu in tool_uses:
+                handler = TOOL_HANDLERS.get(tu.name)
+                if not handler:
+                    result_text = json.dumps({"error": f"Unknown tool: {tu.name}"})
+                elif tu.name in ("save_recipe", "compare_plan_vs_intake"):
+                    result_text = await handler(tu.input, current_user.id, db)
+                else:
+                    result_text = await handler(tu.input)
+                tool_results.append({"type": "tool_result", "tool_use_id": tu.id, "content": result_text})
+
+            messages = messages + [
+                {"role": "assistant", "content": probe.content},
+                {"role": "user", "content": tool_results},
+            ]
+    except anthropic.APIError as exc:
+        log.error("ai.stream.tool_error", exc=str(exc))
+        raise HTTPException(status_code=502, detail="AI service unavailable")
+
+    async def _event_stream():
+        full_reply = ""
+        async for chunk in _stream_chat(messages, system):
+            yield chunk
+            if '"done": true' in chunk:
+                import re
+                m = re.search(r'"full_text":\s*"(.*?)"', chunk, re.DOTALL)
+                if m:
+                    full_reply = m.group(1)
+
+        # Persist session after stream completes
+        session.messages = messages + [{"role": "assistant", "content": full_reply}]
+        await db.commit()
+
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
 
 
 # ── Photo-to-Macro Analysis ────────────────────────────────────────────────────

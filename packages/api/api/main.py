@@ -9,6 +9,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from api.config import settings
 from api.db.engine import engine
@@ -71,4 +72,49 @@ async def ws_endpoint(
 
 @app.get("/api/v1/health")
 async def health():
-    return {"status": "ok"}
+    """
+    Deep health check for container orchestration and uptime monitoring.
+    Verifies database connectivity, Redis availability, and AI API reachability.
+    Returns 200 only when all critical services are healthy.
+    """
+    import time
+    checks: dict[str, dict] = {}
+    healthy = True
+
+    # ── Database ──────────────────────────────────────────────────────────────
+    t0 = time.monotonic()
+    try:
+        from sqlalchemy import text
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        checks["database"] = {"status": "ok", "latency_ms": round((time.monotonic() - t0) * 1000, 1)}
+    except Exception as exc:
+        checks["database"] = {"status": "error", "detail": str(exc)}
+        healthy = False
+
+    # ── Redis ─────────────────────────────────────────────────────────────────
+    t0 = time.monotonic()
+    try:
+        from api.services.realtime import get_redis
+        await get_redis().ping()
+        checks["redis"] = {"status": "ok", "latency_ms": round((time.monotonic() - t0) * 1000, 1)}
+    except Exception as exc:
+        checks["redis"] = {"status": "error", "detail": str(exc)}
+        healthy = False
+
+    # ── Anthropic API ─────────────────────────────────────────────────────────
+    t0 = time.monotonic()
+    try:
+        import anthropic
+        probe = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        await probe.models.list()
+        checks["ai"] = {"status": "ok", "latency_ms": round((time.monotonic() - t0) * 1000, 1)}
+    except Exception as exc:
+        # Non-fatal — AI outage shouldn't take down health check
+        checks["ai"] = {"status": "degraded", "detail": str(exc)}
+
+    status_code = 200 if healthy else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": "ok" if healthy else "degraded", "checks": checks},
+    )

@@ -48,13 +48,34 @@ export default function ClientChatPage() {
     setInput("");
     setMessages((m) => [...m, { role: "user", content: trimmed }]);
     setLoading(true);
+
+    // Optimistically add an empty assistant message that we'll fill in via streaming
+    setMessages((m) => [...m, { role: "assistant", content: "" }]);
+
     try {
-      const res = await api.ai.chat(trimmed, { session_id: sessionId });
-      setSessionId(res.session_id);
-      setMessages((m) => [...m, { role: "assistant", content: res.reply }]);
+      const res = await api.ai.chatStream(
+        trimmed,
+        { session_id: sessionId },
+        (delta) => {
+          // Append each delta to the last (assistant) message
+          setMessages((m) => {
+            const updated = [...m];
+            updated[updated.length - 1] = {
+              role: "assistant",
+              content: updated[updated.length - 1].content + delta,
+            };
+            return updated;
+          });
+        },
+      );
+      if (res.session_id) setSessionId(res.session_id);
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "Something went wrong. Please try again.";
-      setMessages((m) => [...m, { role: "assistant", content: `_Error: ${msg}_` }]);
+      setMessages((m) => {
+        const updated = [...m];
+        updated[updated.length - 1] = { role: "assistant", content: `_Error: ${msg}_` };
+        return updated;
+      });
     } finally {
       setLoading(false);
     }
@@ -122,7 +143,8 @@ export default function ClientChatPage() {
           </div>
         ))}
 
-        {loading && (
+        {/* Show typing dots only while tool calls are in-flight (last message is empty) */}
+        {loading && messages[messages.length - 1]?.content === "" && (
           <div className="flex justify-start">
             <div className="bg-surface border border-black/[0.07] rounded-2xl rounded-bl-sm px-4 py-3">
               <TypingDots />
